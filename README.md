@@ -16,4 +16,4 @@ You have to run it in DosBox and with tasm and tlink installed
 
 ![Alt text](/julia_screen.png?raw=true "Screen")
 
-[linkname](https://youtu.be/u7KOvX1h1ik)
+[Game demo on youtube](https://youtu.be/u7KOvX1h1ik)
