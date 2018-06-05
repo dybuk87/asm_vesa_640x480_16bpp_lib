@@ -1,15 +1,20 @@
-NewFile proc  ; ds:dx = adres nazwy
- xor cx,cx
- mov ah,03ch
- int 21h
- ret
+; Create new file
+; DS:DX - pointer to file name
+NewFile proc  
+	xor cx,cx
+ 	mov ah,03ch
+ 	int 21h
+	ret
 endp
 
-OpenFile proc ;WA : ds:dx = adres nazwy al= tryb dostepu(0=R, 1=W ,2=RW)
-              ;WY : ax - dojscie
+; Open existing file
+; DS:DX - pointer to file name
+; AL - access type (0 - Read only, 1 - Write only, 2 Read and Write
+; AX - return file handler, this handler is used by read, write end close methods
+OpenFile proc 
  mov ah,03dh
  int 21h
- jnc dalejOpen
+ jnc open_file_success
   mov ax,0003h
   int 10h 
   mov ah,09
@@ -17,17 +22,20 @@ OpenFile proc ;WA : ds:dx = adres nazwy al= tryb dostepu(0=R, 1=W ,2=RW)
   int 21h
   mov ah,4ch
   int 21h
-  ret
- DalejOpen:
+open_file_success:
  ret
 endp
 
-ReadFile proc ;WA : BX - handle  cx -ilosc w bajtach 
-              ;WY : ds:dx -> wyjscie danych
+
+; Read bytes from file
+; BX - file handler from OpenFile
+; CX - bytes to read
+; DX:DX - destination array
+ReadFile proc  
  push eax
  mov ah, 03fh
  int 21h
- jnc DalejRead
+ jnc read_file_success
   mov ax,0003h
   int 10h 
   mov ah,09
@@ -35,24 +43,30 @@ ReadFile proc ;WA : BX - handle  cx -ilosc w bajtach
   int 21h
   mov ah,4ch
   int 21h
-  ret  
-  DalejRead:
+read_file_success:
  pop eax
   ret
 endp
 
-SaveFile proc ;WA : BX - handle  cx - ilosc bajtow  Ds:dx ->poczatek danych
+
+; Write bytes to file
+; BX - file handler from OpenFile
+; CX - how many bytes to save
+; DS:DX - pointer to array to save 
+SaveFile proc 
  mov ah,040h
  int 21h
  ret
 endp
 
-CloseFile proc ;WA : BX -Handle
+; Close file 
+; BX - file handler from OpenFile
+CloseFile proc 
  mov ah,03eh
  int 21h
  ret
 endp
 
-errorOpen DB "Blad przy otwieraniu pliku. $"
-errorRead DB "Blad przy odczycie z pliku. $"
-errorSave DB "Blad przy zapisie do pliku. $" 
+errorOpen DB "Open file error. $"
+errorRead DB "Read file error. $"
+errorSave DB "Write file error. $" 

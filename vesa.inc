@@ -1,69 +1,100 @@
 include file.inc
 
+; each bitmap need 16 bytes for handler
+;  XMS memory handler : uint16
+;  Image Res X        : uint32
+;  Image Res Y	      : uint32
+;  Image Size in bytes: uint32
+;  padding	      : uint16 
+
+; We have opne bitmap for double buffering, memory allocation in Start111h
 SCREEN_BUFFER DB 16 dup(0);   
+
+; constant offset for each value in image  handler 
    handle_ equ  0
    ResX_   equ  2
    ResY_   equ  6
    Size_   equ 10
 
-   
-; SI - TIMAGE 
-; EDI, EAX - ResX x ResY
+; Allocate memory for new image 16 bit color
+; SI - Pointer to 16 bytes handler (it will save Handler, sizeX, sizeY, Size into it) 
+; EDI, EAX - Image resolution ResX x ResY
 NewImg:
- mov [SI+RESX_],EDI
- mov [SI+RESY_],EAX
+ mov [SI+RESX_],EDI   ; Save bitmap imension
+ mov [SI+RESY_],EAX   
  mul edi              ; EDX : EAX = EAX*EDI
- shl eax,1            ; EAX = ResX*resY*BPP
- mov [SI+SIZE_],EAX   ; zapamietaj rozmiar 
+ shl eax,1            ; EAX = ResX*resY*BPP   (each color require 2 bytes)
+ mov [SI+SIZE_],EAX   ; Save bitmap size in bytes  
  mov di, si
- add di, HANDLE_ 
- call allocateMem  
+ add di, HANDLE_      ; es:di - pointer where XMS memory handler will be saved
+ call allocateMem     
 ret   
-   
-; SI - TIMAGE
+  
+; Free XMS memory allocated for image
+; SI - Pointer to 16 byte bitmap handler
 FreeImg:
  push si
- mov DX, word ptr [SI+HANDLE_]  
- call freeMem 
+ mov DX, word ptr [SI+HANDLE_]   ; all we need to free mem is handler
+ call freeMem 	
  pop si
  xor dx,dx
- mov [SI+Handle_],dx
+ mov [SI+Handle_], dx		; clear handler in image structure
 ret   
    
-   
+
+; Initialize vesa graphic 
+; 111h - this is id for graphic 640x480 16 bit color   
 Start111h:
 	;jmp @ok_v
 	mov ax,4F02h
 	mov bx,111h
-	int 10h     
+	int 10h       ; after this line we should have 640x480 16 bit color enabled
  
-	cmp ax,004Fh
+	cmp ax,004Fh  ; check if ok
 	je @ok_v
 		mov ah,4ch
 		int 21h 
 	@ok_v:
  
+	; allocate bitmap for double buffer
 	lea si, SCREEN_BUFFER	
 	mov edi, 640
 	mov eax, 480
 	call NewImg
 ret 
  
- 
+
+; This method send SCREEN_BUFFER to actual visible buffer using vesa pageing 
+; We are working in Real mode, so graphic window is in 0xA000 : 0000x to 0xA000 : 0xFFFF that is why we can access  65536 bytes(65kb) of screen
+; this is not enought to show 640x480 16bpp (614400 bytes - 600 kb)
+; vesa driver allow to remap this 0xA000 to point different parts of actual screen. 
 BLIT:
- lea si, SCREEN_BUFFER  
- mov eax, 614400 
- xor ecx,ecx
- xor edx,edx
- @pet_@:
-  mov ebx,10000h
+ lea si, SCREEN_BUFFER   ; source image
+ mov eax, 614400 	 ; this is size of screen - 600kb
+ xor ecx,ecx		 ; eax will be used to track how many bytes left to transfer from screen_buffer
+ xor edx,edx		 ; ebx store information how many bytes to send in each loop (64kb or less if no more data available)
+			 ; ecx - source pointer 
+			 ; edx - page number
+			 ; dest offset in real screen is calculated as follow :
+			 ;  offset = PAGE_NUMBER * PAGE_SIZE(65536) + ADRESS_IN_PAGE
+			 ; to calculate page and offset in page for pixel we can caluclate 
+			 ; base_offset = (x + y * 640) * 2
+			 ; page_no = base_offset / PAGE_SIZE
+			 ; offset_in_page = base_offset % PAGE_SIZE
+			 ; to change pixel we ned to change vesa to page to "page_no" and write 2 bytes to address 0xA000:offset_in_page
+ @pet_@:		 ; each loop copy 64kb of data to 0A000
+  mov ebx,10000h	
   cmp eax,10000h
   jae ___ok  
    mov ebx,eax
-   mov eax,10000h
+   mov eax,10000h	
   ___ok:
   sub eax,10000h  
 
+	; at this point eax - how many data left to copy, ebx - hom many data to copy 
+	; ecx - pointer to source data in screen_buffer
+
+ ; switch vesa page
   push si
   push edx  
   push eax
@@ -72,10 +103,13 @@ BLIT:
   push ebx
    mov ax,04F05h
    mov bx,0   
-   int 10h
+   int 10h  ; this interrupt change page, page no in dx
   pop ebx
   
   pushad
+
+; this method send ebx bytes from Image.handle:ecx to 0A000:0000
+; XMS use 0 handler to access real mode (application) memory, offset is calculated as  SEGMENT * 65536 + OFFSET 
   moveExtMem [SI+HANDLE_], ecx, 0, 0A0000000h, ebx  
   cmp al,1
   je ooookkkk 
@@ -87,24 +121,31 @@ ooookkkk:
   pop eax
   pop edx
   pop si
-  add ecx,10000h
-  inc edx
+  add ecx,10000h ; update source pointer
+  inc edx        ; inc page number
  cmp eax,0
  jne @pet_@
 ret 
  
 
+; Fill whole image with one color
+; DS:SI - image handler
+; AX - color in RGB_565
 FILL:
+ ; first fill AX color to line buffer
  lea di, linia
- mov cx,[SI+ResX_]
- rep stosw
+ mov cx,[SI+ResX_]   ; we try to fill line in the same size as image ResX
+ rep stosw	
+
+ ; at this point we have line size ResX filled with desired color
+ ; now we can send it XMS image buffer ResY times
  
  xor edx, edx
  mov dx,cs
  shl edx,16
- mov dx,offset linia    ; edx - adres lini
+ mov dx,offset linia    ; edx - far pointer for XMS  (SEGMENT * 65536 + line offset)
 
- mov ecx,[SI+ResY_]     ; ecx - licznik
+ mov ecx,[SI+ResY_]     ; ecx - how meny scan lines
  xor ebx,ebx
  
  @petlas:
@@ -117,6 +158,11 @@ FILL:
    shl ecx,1
    push ecx
    pushad
+
+   ; 0:EDX is pointer to line filled with desired color
+   ; SI+HANDLER_ - XMS memory pointer to destination image
+   ; ebx - destination position  =  y * ResX where y inc every loop
+   ; ecx - size of scan line (image resX)
    MoveExtMem 0, edx, [SI+Handle_], ebx,  ecx        
   
    cmp al,1 
@@ -135,11 +181,11 @@ FILL:
 
 ret 
 
-
-; WE: AX - Red;
-;     BX - Green;
-;     CX - Blue;
-; WY: AX - kolor;
+; method convert RGB_888(AX, BX, CX) to RG_565 (AX) 
+; IN:  AX - Red;
+;      BX - Green;
+;      CX - Blue;
+; OUT: AX - kolor;
 RGBToCol:
  shr ax,3
  shl ax,11
