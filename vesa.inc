@@ -196,6 +196,15 @@ RGBToCol:
  or ax,cx 
 ret
 
+
+; Draw part of src bitmap to dest bitmap
+; srcX, srcY - this is upper left corner(star position) of src bitmap
+; destX, destY - this is destination position to draw bitmap
+; sX, sY  - size of copied bitmap
+; 
+; example if we want to copy part of source bitmap starting from position (150, 90) and size (40, 120), to
+; position 100, 20 in destination bitmap we will call this method:
+; PutPartBitmap srcBitmap, destBitmap, 150, 90, 100, 20, 40, 120   
 PutPartBitmap macro srcHandler, destHandler, srcX, srcY, destX, destY, sX, sY
  push ds
  push es
@@ -233,46 +242,49 @@ endm
 @LOOP_X_SIZE equ [EBP - 16]
 
 
+; this procedure is called by macro PutPartBitmap, for details check PutPartBitmap macro
 ; ds:si <- image handler
 ; es:di <- output handler
 PutPartBitmapProc:
 	push ebp
-    mov ebp, esp
-	sub esp, 32
+        mov ebp, esp
+	sub esp, 32		; we reserve stack for variables
 
+	; put src and dst bitmap XMS handlers to variables
 	xor ax, ax
 	mov ax, [ESI + HANDLE_]
-	mov @SRC_HANDLER, ax
+	mov @SRC_HANDLER, ax	
 	
 	xor ax, ax
 	mov ax, [EDI + HANDLE_]
 	mov @DST_HANDLER, ax
 		
+	; we will copy line by line, so get line length in bytes and store in variable
 	mov eax, @sX
-	shl eax, 1			; EAX <- cpy loop size
-	mov ecx, eax 		; EAX i ECX <- cpy loop size
+	shl eax, 1			; EAX <- cpy loop size in bytes 2 byte per pixel
+	mov ecx, eax 			; EAX i ECX <- cpy loop size
 	mov @LOOP_X_SIZE, eax
 	
+	; after copying one line we have to move to next line, for each bitmap
+	; skip bytes equal 2 times ResX for each bitmap, we calculate it and store to variables
 	mov eax, [ESI + ResX_]
 	shl eax, 1
-	;sub eax, ecx		;  EAX = 2 * (SRC.RES_X - sX)  ; skip src offset 
-	mov @SKIP_SRC_OFFSET, eax
+	mov @SKIP_SRC_OFFSET, eax       
 	
 	mov eax, [EDI + ResX_]
 	shl eax, 1
-	;sub eax, ecx		;  EAX = 2 * (DST.RES_X - sX)  ; skip dst offset 
 	mov @SKIP_DST_OFFSET, eax
 	
+	; calculate start position in bytes :  (srcY * src.ResX + srcX) * 2	
 	mov ecx, @srcY
-	
-	
 	mov eax, @srcY
 	mov ebx, [ESI + ResX_]	
 	mul ebx
 	add eax, @srcX
 	shl eax, 1  		; EAX <- SRC OFFSET
 	mov esi, eax		; ESI <- SRC OFFSET
-	
+
+	; calculate destination address in bytes : (dstX * dst.REsX + dstX) * 2	
 	mov eax, @destY
 	mov ebx, [EDI + ResX_]
 	mul ebx
@@ -280,32 +292,36 @@ PutPartBitmapProc:
 	shl eax, 1			; EAX <- DST OFFSET	
 	mov edi, eax		; EDI <- DST OFFSET	
 	
-	mov eax, 0
+	mov eax, 0    ; loop index
 	
-	mov ecx, @sY
+	mov ecx, @sY  ; bytes to copy 
 		
 .ppb_y_loop:	
 	push eax
 	
 	pushad
-	
+
+	; copy one line from src to dst	
 	moveExtMem  @SRC_HANDLER, esi,  @DST_HANDLER, edi, @LOOP_X_SIZE
 	
 	popad
 	
 	
+	; shift src and dst index
 	add esi, @SKIP_SRC_OFFSET
 	add edi, @SKIP_DST_OFFSET
 	
 
 	pop eax
 	inc eax
-loop .ppb_y_loop
+loop .ppb_y_loop ; loop until copied sY lines
 	
 	add esp, 32
 	pop ebp
 ret 24
 
+; Work exactly like PutPartBitmap but with additional sprColor that allow transparency
+; sprColor is transparent color
 PutPartSprite macro srcHandler, destHandler, srcX, srcY, destX, destY, sX, sY, sprColor
  push ds
  push es
@@ -344,12 +360,13 @@ endm
 
 @SPR_LOOP_X_SIZE equ [EBP - 16]
 
+; called from PutPartSprite macro, check macro documentation for details
 ; ds:si <- image handler
 ; es:di <- output handler
 PutPartSpriteProc:
 	push ebp
-    mov ebp, esp
-	sub esp, 32
+        mov ebp, esp
+	sub esp, 32              ; THIS PART WORK EXACTLY LIKE PutPartBitmap
 
 	xor ax, ax
 	mov ax, [ESI + HANDLE_]
@@ -399,25 +416,32 @@ PutPartSpriteProc:
 	push eax
 	
 	pushad
-	
-	;moveExtMem  @SPR_SRC_HANDLER, esi,  @SPR_DST_HANDLER, edi, @SPR_LOOP_X_SIZE
+
+	; THIS COPY LINE LOOP IS DIFFERENT THAN IN COPY BITMAP PART
+	; insted from just copying line, we do copy src bitmap line to hline buffer
+	; and destination bitmap line to hline2 buffer	
 	
 	xor ebx, ebx
 	mov bx, cs
 	shl ebx, 16	
 	lea eax,  hline
-	add ebx, eax	
+	add ebx, eax       ; hline offset in XMS memory => cs * 65536 + offset hline	
+			   ; copy source line to hline
 	moveExtMem  @SPR_SRC_HANDLER, esi,  0, ebx, @SPR_LOOP_X_SIZE
 	
 	xor ecx, ecx
 	mov cx, cs
 	shl ecx, 16	
 	lea eax,  hline2
-	add ecx, eax
+	add ecx, eax	   ; hline2 offset in XMS memory => cs * 65536 + offset hline2
+			   ; copy destination line to hline2
 	moveExtMem  @SPR_DST_HANDLER, edi,  0, ecx, @SPR_LOOP_X_SIZE
 	
 	push esi
 	push edi
+
+	; now we have hline that contain source line, and hline2 that contain destination line
+	; at this point we copy each pixel of hline to hline2 when source pixel is different that sprColor
 	
 	lea esi, hline
 	lea edi, hline2
@@ -431,7 +455,8 @@ PutPartSpriteProc:
 		.SPR_ppb_no_copy:
 		add di, 2
 	loop .SPR_ppb_x_loop
-	
+
+	; hline2 contains merged source line to dest line with excluded sprColors	
 	
 	pop edi
 	pop esi
@@ -441,12 +466,12 @@ PutPartSpriteProc:
 	shl ecx, 16	
 	lea eax,  hline2
 	add ecx, eax
-	
+			; last thing left is to copy hline2 to destination
 	moveExtMem  0, ecx, @SPR_DST_HANDLER, edi, @SPR_LOOP_X_SIZE
 	
 	popad
 	
-	
+	; jump to next line	
 	add esi, @SPR_SKIP_SRC_OFFSET
 	add edi, @SPR_SKIP_DST_OFFSET
 	
@@ -461,6 +486,7 @@ jnz .SPR_ppb_y_loop
 	pop ebp
 ret 26
 
+; Put whole source bitmap to destination at x,y position
 ; ds:si <- image handler
 ; es:di <- output handler
 ; eax, ebx <- dest pos (x,y)
@@ -507,7 +533,8 @@ PutBitmap:
 	push esi				 ;  STACK  : BP  ESI EDI (2 * src.ResX)  |  EAX = SRC_HANDLER   EBX = DEST_HANDLER     ecx = ResY_	EDX = (2 * dst.ResX)	 ESI = (2 * src.ResX) EDI = (dest ptr(x,y))
 	
 	xor esi, esi				 ;  STACK  : BP ESI EDI (2 * src.ResX)  |  EAX = SRC_HANDLER   EBX = DEST_HANDLER     ecx = ResY_	EDX = (2 * dst.ResX)	 ESI = 0 EDI = (dest ptr(x,y))
-	
+
+; THIS is scan line copy loop	
 	.PutBitmap_loopY:
 		push eax
 		push ebx
@@ -518,6 +545,7 @@ PutBitmap:
 		
 		mov ecx, ss:[bp - 12]
 		pushad
+			; copy whole line from src to dst
 		moveExtMem  ax, esi, bx, edi, ecx 
 		popad
 		
@@ -528,9 +556,9 @@ PutBitmap:
 		pop ebx
 		pop eax
 		
+		; jump to next line
 		add esi, ss:[bp - 12]
 		add edi, edx
-		;sub edi, ss:[bp - 12]  
 		
 	loop .PutBitmap_loopY
 	
@@ -543,27 +571,32 @@ PutBitmap:
 	pop bp
 ret
 
- 
+
+; Load bmp file  
 ; ds:dx = adres nazwy  
 ; ds:si <- image handler              
 LoadBmp:
-	mov al,02d     ; al<-02h
-	call OpenFile  ;Otwoz plik
-	mov handlef,ax  ;zapisz uchwyt pliku 
+	mov al,02d     ; al<-02h open file to read
+	call OpenFile  
+	mov handlef,ax  ;  store file handler 
 	
-	mov bx,ax      ;uchwyt do bx
-	mov cx,54d     ;do cx rozmiar naglowka
-	lea dx, header   ;naglowek
-	call ReadFile  ;wczytaj naglowek
+	mov bx,ax      ;  copy file handler to  bx
+	mov cx,54d     ; read first 54 bytes (bmp header)
+	lea dx, header   ; and store it into structure
+	call ReadFile  ; read
 
-	;SI - TIMAGE 
+	; SI - is pointer to TIMAGE (bitmap handler)
+	; allocate data for image of size header.ResX x header.ResY 
 	mov edi, [header.ResX]	
 	mov EAX, [header.ResY]
 	call NewImg
 	
-	mov ecx,[header.ResY]
-    mov eax,[header.resX]
+	; memory allocated, now it is time to load data
 	
+	mov ecx,[header.ResY]
+        mov eax,[header.resX]
+	
+	; BMP store image upside down so we decrement pointer ecx
 bmpYLoop:
 	dec ecx			
 
@@ -574,8 +607,8 @@ bmpYLoop:
 	shl ecx, 1			;
 	add ecx, eax        ; 3 * RESX
 	xor edx, edx
-	lea dx, hline       ; WA : BX - handle  cx -ilosc w bajtach 
-						; write to hline												
+	lea dx, hline       ;  BX - file handle  cx - byte to read
+						; we read image line by line, each line in 24 bit image has 3 bytes per pixel (3 * RESX)
 						
     call ReadFile
 	
@@ -598,6 +631,8 @@ bmpYLoop:
 	
 	lea si, hline
 	lea di, hline	
+
+	; now we have to convert RGB_888 to RGB_565 
 	
 	; convertion loop RGB_888 to RGB_565 	
 	.bmpXLoop:
@@ -642,6 +677,9 @@ bmpYLoop:
 		add esi, 3
 	loop .bmpXLoop
 
+	; at this point we do have converted scan line to RGB 565
+	; we have to copy it to destination image
+
 	; TODO send xms
 	xor eax, eax
 	mov ax, cs
@@ -672,7 +710,7 @@ bmpYLoop:
 	pushad
 	mov edi, eax		
 	moveExtMem 0, edi, [SI+HANDLE_], ecx, ebx
-	 cmp al,1 
+	 cmp al,1  ; check copy error
    je ooookuk
      mov ah,4ch
     int 21h
@@ -690,6 +728,9 @@ bmpYLoop:
 	push esi
 	push eax
 	push ecx	; STACK :  EDI   IMAGE_HANDLE  RES_X  Y_POS
+
+	; each bmp scan line is aligned to multiplication of 4 so we might need to skip few bytes
+	; if (3*RESX) mod 4 is equal 0 then each scan line is already aligned
 		
 	; READ align START
 	xor ebx, ebx
@@ -714,15 +755,17 @@ bmpYLoop:
 	pop esi
 	pop edi
 	
-	cmp ecx, 0	
+	cmp ecx, 0	; check if we read all lines
 	jne bmpYLoop
 	
 	
 ret 
 
+; helper for file handler
 handlef DW ?
 
-HeaderDef  struc             ;naglowek pliku bmp = 54 bajty
+; BMP file header strucutre
+HeaderDef  struc             ; 54 bytes
   Imgtype  DW ?
   FileSize DD ?
   res1     DW ?  ;=0
@@ -743,6 +786,7 @@ compresion DD ?
  
 header    HeaderDef <?> 
  
+; Back to text mode, ill VESA graphic and free SCREEN_BUFFER
 StartTxt:
 ;jmp @ok_v2
  mov ax,0003h
@@ -750,15 +794,17 @@ StartTxt:
  @ok_v2:
  lea si, SCREEN_BUFFER
  call freeImg
- 
 ret 
 
+; helpers buffer 
 hline DB 2000 dup(00h)
 
 hline2 DB 2000 dup(00h)
 
 linia DB 1280 dup(0ffh)
 
+
+; Wait for vertical sync 
 vsync:
   push ax
   push dx
