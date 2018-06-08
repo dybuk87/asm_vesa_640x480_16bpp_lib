@@ -21,9 +21,12 @@ start:
 	KEY_A    equ 30
 	KEY_S    equ 31
 	KEY_D 	 equ 32
+	
+	MOUSE_BMP db 16 dup(0)
 
   include memory.inc  
   include vesa.inc
+  include mouse.inc
  dalej:
 	mov ax,cs
 	mov es,ax
@@ -48,6 +51,13 @@ start:
 	lea dx, BMP_BACKGROUND_NAME
 	lea esi, BACKGROUND
 	call LoadBmp
+	
+	lea dx, MOUSE_BMP_NAME
+	lea esi, MOUSE_BMP
+	call LoadBmp
+	
+	lea esi, MOUSE_BMP
+	call initMouse
 	
 	call memoryRaport
 	
@@ -110,6 +120,8 @@ juliaLoop:
 		anim_in_range:
 		mov ANIM_ITER, ax
 	
+	call ShowMouse
+	
 	call vsync
 	call blit
 	
@@ -147,6 +159,9 @@ bye:
 	lea esi, BACKGROUND	
 	call FreeImg
 	
+	lea esi, MOUSE_BMP
+	call FreeImg
+	
 	call memoryRaport
     
   call StartTxt
@@ -166,6 +181,7 @@ bye:
  
  BMP_NAME DB "anim3.bmp",0
  BMP_BACKGROUND_NAME DB "bk.bmp",0
+ MOUSE_BMP_NAME DB "mouse.bmp",0
  
  TOTAL_FREE_MEM DB 13, 10, "Total free mem(kb) : ", 0
  LARGEST_FREE_MEM_BLOCK DB "Largest free mem block(kb) : ", 0
